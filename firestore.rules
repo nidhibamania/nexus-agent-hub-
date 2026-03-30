@@ -1,0 +1,45 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Message Validation
+    function isValidMessage(data) {
+      return data.role in ['user', 'model'] &&
+             data.content is string && data.content.size() > 0 && data.content.size() < 10000 &&
+             data.agentId in ['researcher', 'creative', 'architect', 'pulse'] &&
+             data.uid == request.auth.uid &&
+             data.timestamp is timestamp;
+    }
+
+    // User Profile Validation
+    function isValidUserProfile(data) {
+      return data.uid == request.auth.uid &&
+             data.email is string &&
+             data.createdAt is timestamp;
+    }
+
+    // Rules for Messages
+    match /messages/{messageId} {
+      allow read: if isAuthenticated() && resource.data.uid == request.auth.uid;
+      allow create: if isAuthenticated() && isValidMessage(request.resource.data);
+      allow update, delete: if false; // Messages are immutable for this app
+    }
+
+    // Rules for User Profiles
+    match /users/{uid} {
+      allow read: if isAuthenticated() && uid == request.auth.uid;
+      allow create, update: if isAuthenticated() && isOwner(uid) && isValidUserProfile(request.resource.data);
+      allow delete: if false;
+    }
+  }
+}

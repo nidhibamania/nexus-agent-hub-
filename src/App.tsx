@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Type, FunctionDeclaration } from "@google/genai";
 import { motion, AnimatePresence } from "motion/react";
 import Markdown from 'react-markdown';
 import { 
@@ -14,9 +14,28 @@ import {
   ChevronRight,
   Loader2,
   Terminal,
-  Zap
+  Zap,
+  Globe,
+  LogOut,
+  LogIn
 } from "lucide-react";
 import { AGENTS, Agent, AgentId } from './types';
+import { 
+  auth, 
+  db, 
+  googleProvider, 
+  signInWithPopup, 
+  signOut, 
+  onAuthStateChanged, 
+  collection, 
+  addDoc, 
+  query, 
+  where, 
+  orderBy, 
+  onSnapshot, 
+  serverTimestamp,
+  Timestamp
+} from './firebase';
 
 // Initialize Gemini (will be re-initialized in handleSendMessage to ensure fresh API key)
 let ai: GoogleGenAI;
@@ -25,14 +44,17 @@ interface Message {
   role: 'user' | 'model';
   content: string;
   timestamp: Date;
+  id?: string;
 }
 
 export default function App() {
+  const [user, setUser] = useState<any>(null);
   const [activeAgent, setActiveAgent] = useState<Agent>(AGENTS[0]);
   const [messages, setMessages] = useState<Record<AgentId, Message[]>>({
     researcher: [],
     creative: [],
-    architect: []
+    architect: [],
+    pulse: []
   });
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -42,13 +64,82 @@ export default function App() {
   const currentMessages = messages[activeAgent.id];
 
   useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setUser(user);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user) {
+      setMessages({
+        researcher: [],
+        creative: [],
+        architect: [],
+        pulse: []
+      });
+      return;
+    }
+
+    const q = query(
+      collection(db, 'messages'),
+      where('uid', '==', user.uid),
+      orderBy('timestamp', 'asc')
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const allMessages: Record<AgentId, Message[]> = {
+        researcher: [],
+        creative: [],
+        architect: [],
+        pulse: []
+      };
+
+      snapshot.docs.forEach((doc) => {
+        const data = doc.data();
+        const msg: Message = {
+          id: doc.id,
+          role: data.role,
+          content: data.content,
+          timestamp: data.timestamp instanceof Timestamp ? data.timestamp.toDate() : new Date()
+        };
+        if (allMessages[data.agentId as AgentId]) {
+          allMessages[data.agentId as AgentId].push(msg);
+        }
+      });
+
+      setMessages(allMessages);
+    }, (error) => {
+      console.error("Firestore Error:", error);
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [currentMessages, isLoading]);
 
+  const handleLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error) {
+      console.error("Login Error:", error);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error("Logout Error:", error);
+    }
+  };
+
   const handleSendMessage = async () => {
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isLoading || !user) return;
 
     // Check for either the standard key or our new custom key name
     const apiKey = process.env.NEXUS_API_KEY || process.env.GEMINI_API_KEY;
@@ -69,26 +160,44 @@ export default function App() {
     // Initialize AI with the current key
     ai = new GoogleGenAI({ apiKey });
 
-    const userMessage: Message = {
-      role: 'user',
-      content: input,
-      timestamp: new Date()
-    };
-
-    setMessages(prev => ({
-      ...prev,
-      [activeAgent.id]: [...prev[activeAgent.id], userMessage]
-    }));
+    const userMessageContent = input;
     setInput('');
     setIsLoading(true);
 
     try {
+      // Save user message to Firestore
+      await addDoc(collection(db, 'messages'), {
+        role: 'user',
+        content: userMessageContent,
+        agentId: activeAgent.id,
+        uid: user.uid,
+        timestamp: serverTimestamp()
+      });
+
+      // Define Tools for Track 2: Real-world Data
+      const getWeatherTool: FunctionDeclaration = {
+        name: "getWeather",
+        description: "Get the current weather for a specific city.",
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            city: {
+              type: Type.STRING,
+              description: "The name of the city to get weather for."
+            }
+          },
+          required: ["city"]
+        }
+      };
+
       const chat = ai.chats.create({
         model: "gemini-3-flash-preview",
         config: {
           systemInstruction: activeAgent.systemInstruction,
-          // Removed googleSearch to support Free Tier API keys
-          // tools: activeAgent.id === 'researcher' ? [{ googleSearch: {} }] : undefined,
+          tools: [
+            ...(activeAgent.id === 'pulse' ? [{ functionDeclarations: [getWeatherTool] }] : []),
+            ...(activeAgent.id === 'researcher' ? [{ googleSearch: {} }] : [])
+          ],
         },
         history: currentMessages.map(m => ({
           role: m.role === 'user' ? 'user' : 'model',
@@ -96,19 +205,66 @@ export default function App() {
         }))
       });
 
-      const result = await chat.sendMessage({ message: input });
+      let result = await chat.sendMessage({ message: userMessageContent });
+      
+      // Handle Function Calls (Track 2: Real-world Data)
+      let functionCalls = result.functionCalls;
+      if (functionCalls) {
+        const toolResults = [];
+        for (const call of functionCalls) {
+          if (call.name === "getWeather") {
+            const city = (call.args as any).city;
+            try {
+              // Fetch real-world data from Open-Meteo API
+              const geoResponse = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=en&format=json`);
+              const geoData = await geoResponse.json();
+              
+              if (geoData.results && geoData.results.length > 0) {
+                const { latitude, longitude, name, country } = geoData.results[0];
+                const weatherResponse = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true`);
+                const weatherData = await weatherResponse.json();
+                
+                toolResults.push({
+                  name: call.name,
+                  response: {
+                    content: `The current weather in ${name}, ${country} is ${weatherData.current_weather.temperature}°C with a windspeed of ${weatherData.current_weather.windspeed} km/h.`,
+                    id: call.id
+                  }
+                });
+              } else {
+                toolResults.push({
+                  name: call.name,
+                  response: { content: `Could not find weather data for ${city}.`, id: call.id }
+                });
+              }
+            } catch (err) {
+              toolResults.push({
+                name: call.name,
+                response: { content: "Error fetching weather data.", id: call.id }
+              });
+            }
+          }
+        }
+        
+        // Send tool results back to model to get final response
+        result = await chat.sendMessage({
+          message: toolResults.map(tr => ({
+            functionResponse: { name: tr.name, response: tr.response }
+          }))
+        });
+      }
+
       const modelResponse = result.text || "I'm sorry, I couldn't generate a response.";
 
-      const modelMessage: Message = {
+      // Save model response to Firestore
+      await addDoc(collection(db, 'messages'), {
         role: 'model',
         content: modelResponse,
-        timestamp: new Date()
-      };
+        agentId: activeAgent.id,
+        uid: user.uid,
+        timestamp: serverTimestamp()
+      });
 
-      setMessages(prev => ({
-        ...prev,
-        [activeAgent.id]: [...prev[activeAgent.id], modelMessage]
-      }));
     } catch (error: any) {
       console.error("Gemini Error:", error);
       const errorMessage: Message = {
@@ -130,6 +286,7 @@ export default function App() {
       case 'Search': return <Search className={className} />;
       case 'Sparkles': return <Sparkles className={className} />;
       case 'Code2': return <Code2 className={className} />;
+      case 'Globe': return <Globe className={className} />;
       default: return <Bot className={className} />;
     }
   };
@@ -182,15 +339,37 @@ export default function App() {
         </div>
 
         <div className="p-4 border-t border-white/10">
-          <div className="bg-white/5 rounded-xl p-4 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-blue-600 to-purple-600 flex items-center justify-center font-bold">
-              U
+          {user ? (
+            <div className="bg-white/5 rounded-xl p-4 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 overflow-hidden">
+                <img 
+                  src={user.photoURL || `https://ui-avatars.com/api/?name=${user.email}`} 
+                  alt="User" 
+                  className="w-10 h-10 rounded-full border border-white/10"
+                  referrerPolicy="no-referrer"
+                />
+                <div className="overflow-hidden">
+                  <div className="text-xs font-medium truncate">{user.displayName || user.email}</div>
+                  <div className="text-[10px] text-white/40">Premium Access</div>
+                </div>
+              </div>
+              <button 
+                onClick={handleLogout}
+                className="p-2 hover:bg-white/10 rounded-lg text-white/40 hover:text-red-400 transition-colors"
+                title="Logout"
+              >
+                <LogOut size={16} />
+              </button>
             </div>
-            <div>
-              <div className="text-xs font-medium">User Account</div>
-              <div className="text-[10px] text-white/40">Premium Access</div>
-            </div>
-          </div>
+          ) : (
+            <button 
+              onClick={handleLogin}
+              className="w-full bg-blue-600 hover:bg-blue-500 text-white p-4 rounded-xl flex items-center justify-center gap-3 font-medium transition-all"
+            >
+              <LogIn size={20} />
+              <span>Login with Google</span>
+            </button>
+          )}
         </div>
       </motion.aside>
 
@@ -307,23 +486,42 @@ export default function App() {
 
         {/* Input Area */}
         <div className="p-6 bg-gradient-to-t from-[#0A0A0A] to-transparent">
-          <div className="max-w-4xl mx-auto relative">
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-              placeholder={`Message ${activeAgent.name}...`}
-              className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 pl-6 pr-16 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all placeholder:text-white/20"
-            />
-            <button
-              onClick={handleSendMessage}
-              disabled={!input.trim() || isLoading}
-              className="absolute right-3 top-1/2 -translate-y-1/2 p-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:hover:bg-blue-600 rounded-xl transition-all"
-            >
-              <Send size={20} />
-            </button>
-          </div>
+          {!user ? (
+            <div className="max-w-4xl mx-auto p-8 bg-white/5 border border-white/10 rounded-3xl text-center space-y-4">
+              <div className="w-16 h-16 bg-blue-600/20 text-blue-500 rounded-2xl flex items-center justify-center mx-auto">
+                <Zap size={32} />
+              </div>
+              <h3 className="text-xl font-bold">Unlock the Power of Nexus AI</h3>
+              <p className="text-white/50 text-sm max-w-md mx-auto">
+                Login to save your chat history, access specialized agents, and experience persistent AI memory.
+              </p>
+              <button 
+                onClick={handleLogin}
+                className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded-xl font-semibold transition-all inline-flex items-center gap-2"
+              >
+                <LogIn size={18} />
+                Get Started
+              </button>
+            </div>
+          ) : (
+            <div className="max-w-4xl mx-auto relative">
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+                placeholder={`Message ${activeAgent.name}...`}
+                className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 pl-6 pr-16 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all placeholder:text-white/20"
+              />
+              <button
+                onClick={handleSendMessage}
+                disabled={!input.trim() || isLoading}
+                className="absolute right-3 top-1/2 -translate-y-1/2 p-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:hover:bg-blue-600 rounded-xl transition-all"
+              >
+                <Send size={20} />
+              </button>
+            </div>
+          )}
           <p className="text-center text-[10px] text-white/20 mt-4">
             Nexus AI can make mistakes. Verify important information. Powered by Gemini.
           </p>
