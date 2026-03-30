@@ -51,6 +51,7 @@ export default function App() {
   const [user, setUser] = useState<any>(null);
   const [activeAgent, setActiveAgent] = useState<Agent>(AGENTS[0]);
   const [messages, setMessages] = useState<Record<AgentId, Message[]>>({
+    orchestrator: [],
     researcher: [],
     creative: [],
     architect: [],
@@ -73,6 +74,7 @@ export default function App() {
   useEffect(() => {
     if (!user) {
       setMessages({
+        orchestrator: [],
         researcher: [],
         creative: [],
         architect: [],
@@ -89,6 +91,7 @@ export default function App() {
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const allMessages: Record<AgentId, Message[]> = {
+        orchestrator: [],
         researcher: [],
         creative: [],
         architect: [],
@@ -174,19 +177,41 @@ export default function App() {
         timestamp: serverTimestamp()
       });
 
-      // Define Tools for Track 2: Real-world Data
+      // Define Tools for Track 2 & 3: Real-world Data & Productivity
       const getWeatherTool: FunctionDeclaration = {
         name: "getWeather",
         description: "Get the current weather for a specific city.",
         parameters: {
           type: Type.OBJECT,
           properties: {
-            city: {
-              type: Type.STRING,
-              description: "The name of the city to get weather for."
-            }
+            city: { type: Type.STRING, description: "The name of the city to get weather for." }
           },
           required: ["city"]
+        }
+      };
+
+      const createTaskTool: FunctionDeclaration = {
+        name: "createTask",
+        description: "Create a new productivity task or schedule item.",
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            title: { type: Type.STRING, description: "The title of the task." },
+            dueDate: { type: Type.STRING, description: "Optional due date (ISO string)." }
+          },
+          required: ["title"]
+        }
+      };
+
+      const saveNoteTool: FunctionDeclaration = {
+        name: "saveNote",
+        description: "Save a text note for the user.",
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            content: { type: Type.STRING, description: "The content of the note." }
+          },
+          required: ["content"]
         }
       };
 
@@ -196,7 +221,8 @@ export default function App() {
           systemInstruction: activeAgent.systemInstruction,
           tools: [
             ...(activeAgent.id === 'pulse' ? [{ functionDeclarations: [getWeatherTool] }] : []),
-            ...(activeAgent.id === 'researcher' ? [{ googleSearch: {} }] : [])
+            ...(activeAgent.id === 'researcher' ? [{ googleSearch: {} }] : []),
+            ...(activeAgent.id === 'orchestrator' ? [{ functionDeclarations: [createTaskTool, saveNoteTool] }] : [])
           ],
         },
         history: currentMessages.map(m => ({
@@ -207,7 +233,7 @@ export default function App() {
 
       let result = await chat.sendMessage({ message: userMessageContent });
       
-      // Handle Function Calls (Track 2: Real-world Data)
+      // Handle Function Calls (Track 2 & 3: Real-world Data & Productivity)
       let functionCalls = result.functionCalls;
       if (functionCalls) {
         const toolResults = [];
@@ -241,6 +267,44 @@ export default function App() {
               toolResults.push({
                 name: call.name,
                 response: { content: "Error fetching weather data.", id: call.id }
+              });
+            }
+          } else if (call.name === "createTask") {
+            const { title, dueDate } = call.args as any;
+            try {
+              await addDoc(collection(db, 'tasks'), {
+                uid: user.uid,
+                title,
+                status: 'pending',
+                dueDate: dueDate || null,
+                createdAt: serverTimestamp()
+              });
+              toolResults.push({
+                name: call.name,
+                response: { content: `Successfully created task: "${title}"`, id: call.id }
+              });
+            } catch (err) {
+              toolResults.push({
+                name: call.name,
+                response: { content: "Failed to create task.", id: call.id }
+              });
+            }
+          } else if (call.name === "saveNote") {
+            const { content } = call.args as any;
+            try {
+              await addDoc(collection(db, 'notes'), {
+                uid: user.uid,
+                content,
+                createdAt: serverTimestamp()
+              });
+              toolResults.push({
+                name: call.name,
+                response: { content: "Note saved successfully.", id: call.id }
+              });
+            } catch (err) {
+              toolResults.push({
+                name: call.name,
+                response: { content: "Failed to save note.", id: call.id }
               });
             }
           }

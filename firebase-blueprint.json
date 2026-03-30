@@ -60,6 +60,30 @@
         }
       },
       "required": ["uid", "email", "createdAt"]
+    },
+    "Task": {
+      "title": "Task",
+      "description": "A productivity task or schedule item.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "title": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "completed"] },
+        "dueDate": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "title", "status", "createdAt"]
+    },
+    "Note": {
+      "title": "Note",
+      "description": "A simple text note.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "content": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "content", "createdAt"]
     }
   },
   "firestore": {
@@ -70,6 +94,14 @@
     "/users/{uid}": {
       "schema": "UserProfile",
       "description": "A collection of user profiles."
+    },
+    "/tasks/{taskId}": {
+      "schema": "Task",
+      "description": "A collection of user tasks."
+    },
+    "/notes/{noteId}": {
+      "schema": "Note",
+      "description": "A collection of user notes."
     }
   }
 }

@@ -1,4 +1,4 @@
-export type AgentId = 'researcher' | 'creative' | 'architect' | 'pulse';
+export type AgentId = 'orchestrator' | 'researcher' | 'creative' | 'architect' | 'pulse';
 
 export interface Agent {
   id: AgentId;
@@ -11,6 +11,15 @@ export interface Agent {
 }
 
 export const AGENTS: Agent[] = [
+  {
+    id: 'orchestrator',
+    name: 'Nexus Core',
+    role: 'Primary Coordinator',
+    description: 'The central intelligence that coordinates tasks, schedules, and specialized sub-agents.',
+    systemInstruction: 'You are Nexus Core, the primary coordinator of the Nexus AI Hub. Your goal is to help users manage their productivity by coordinating specialized sub-agents and using tools. You can manage tasks, schedules, and notes. When a user asks for research, creative work, or coding, you should explain that you are coordinating with your specialized sub-agents (Analyst Alpha, Muse Matrix, or Code Core) to get the best results.',
+    icon: 'Zap',
+    color: 'yellow'
+  },
   {
     id: 'researcher',
     name: 'Analyst Alpha',

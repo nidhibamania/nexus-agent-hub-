@@ -41,5 +41,15 @@ service cloud.firestore {
       allow create, update: if isAuthenticated() && isOwner(uid) && isValidUserProfile(request.resource.data);
       allow delete: if false;
     }
+
+    // Rules for Tasks
+    match /tasks/{taskId} {
+      allow read, write: if isAuthenticated() && request.auth.uid == (resource == null ? request.resource.data.uid : resource.data.uid);
+    }
+
+    // Rules for Notes
+    match /notes/{noteId} {
+      allow read, write: if isAuthenticated() && request.auth.uid == (resource == null ? request.resource.data.uid : resource.data.uid);
+    }
   }
 }
