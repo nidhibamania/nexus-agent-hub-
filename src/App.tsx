@@ -18,8 +18,8 @@ import {
 } from "lucide-react";
 import { AGENTS, Agent, AgentId } from './types';
 
-// Initialize Gemini
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+// Initialize Gemini (will be re-initialized in handleSendMessage to ensure fresh API key)
+let ai: GoogleGenAI;
 
 interface Message {
   role: 'user' | 'model';
@@ -50,6 +50,25 @@ export default function App() {
   const handleSendMessage = async () => {
     if (!input.trim() || isLoading) return;
 
+    // Check for either the standard key or our new custom key name
+    const apiKey = process.env.NEXUS_API_KEY || process.env.GEMINI_API_KEY;
+    
+    if (!apiKey || apiKey === 'undefined' || apiKey === '') {
+      const errorMessage: Message = {
+        role: 'model',
+        content: "Error: API Key is missing. Please add a secret named 'NEXUS_API_KEY', paste your key string, and click 'Apply changes'.",
+        timestamp: new Date()
+      };
+      setMessages(prev => ({
+        ...prev,
+        [activeAgent.id]: [...prev[activeAgent.id], errorMessage]
+      }));
+      return;
+    }
+
+    // Initialize AI with the current key
+    ai = new GoogleGenAI({ apiKey });
+
     const userMessage: Message = {
       role: 'user',
       content: input,
@@ -68,32 +87,21 @@ export default function App() {
         model: "gemini-3-flash-preview",
         config: {
           systemInstruction: activeAgent.systemInstruction,
-          tools: activeAgent.id === 'researcher' ? [{ googleSearch: {} }] : undefined,
+          // Removed googleSearch to support Free Tier API keys
+          // tools: activeAgent.id === 'researcher' ? [{ googleSearch: {} }] : undefined,
         },
         history: currentMessages.map(m => ({
-          role: m.role,
+          role: m.role === 'user' ? 'user' : 'model',
           parts: [{ text: m.content }]
         }))
       });
 
       const result = await chat.sendMessage({ message: input });
-      let modelResponse = result.text;
-
-      // Extract grounding sources if available
-      const groundingChunks = result.candidates?.[0]?.groundingMetadata?.groundingChunks;
-      if (groundingChunks && groundingChunks.length > 0) {
-        const sources = groundingChunks
-          .map(chunk => chunk.web?.uri)
-          .filter(Boolean) as string[];
-        
-        if (sources.length > 0) {
-          modelResponse += "\n\n**Sources:**\n" + sources.map(url => `- [${new URL(url).hostname}](${url})`).join('\n');
-        }
-      }
+      const modelResponse = result.text || "I'm sorry, I couldn't generate a response.";
 
       const modelMessage: Message = {
         role: 'model',
-        content: modelResponse || "I'm sorry, I couldn't process that request.",
+        content: modelResponse,
         timestamp: new Date()
       };
 
@@ -101,11 +109,11 @@ export default function App() {
         ...prev,
         [activeAgent.id]: [...prev[activeAgent.id], modelMessage]
       }));
-    } catch (error) {
+    } catch (error: any) {
       console.error("Gemini Error:", error);
       const errorMessage: Message = {
         role: 'model',
-        content: "Error: Failed to connect to the agent. Please check your connection.",
+        content: `Error: Failed to connect to the agent. ${error?.message || "Please check your connection."}`,
         timestamp: new Date()
       };
       setMessages(prev => ({
