@@ -17,7 +17,10 @@ import {
   Zap,
   Globe,
   LogOut,
-  LogIn
+  LogIn,
+  Layout,
+  CheckCircle,
+  FileText
 } from "lucide-react";
 import { AGENTS, Agent, AgentId } from './types';
 import { 
@@ -34,7 +37,8 @@ import {
   orderBy, 
   onSnapshot, 
   serverTimestamp,
-  Timestamp
+  Timestamp,
+  getDocs
 } from './firebase';
 
 // Initialize Gemini (will be re-initialized in handleSendMessage to ensure fresh API key)
@@ -60,6 +64,9 @@ export default function App() {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
+  const [tasks, setTasks] = useState<any[]>([]);
+  const [notes, setNotes] = useState<any[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const currentMessages = messages[activeAgent.id];
@@ -117,6 +124,30 @@ export default function App() {
     });
 
     return () => unsubscribe();
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) {
+      setTasks([]);
+      setNotes([]);
+      return;
+    }
+
+    const tasksQ = query(collection(db, 'tasks'), where('uid', '==', user.uid), orderBy('createdAt', 'desc'));
+    const notesQ = query(collection(db, 'notes'), where('uid', '==', user.uid), orderBy('createdAt', 'desc'));
+
+    const unsubTasks = onSnapshot(tasksQ, (snapshot) => {
+      setTasks(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+
+    const unsubNotes = onSnapshot(notesQ, (snapshot) => {
+      setNotes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+
+    return () => {
+      unsubTasks();
+      unsubNotes();
+    };
   }, [user]);
 
   useEffect(() => {
@@ -215,6 +246,18 @@ export default function App() {
         }
       };
 
+      const listTasksTool: FunctionDeclaration = {
+        name: "listTasks",
+        description: "Retrieve all pending tasks for the user.",
+        parameters: { type: Type.OBJECT, properties: {} }
+      };
+
+      const listNotesTool: FunctionDeclaration = {
+        name: "listNotes",
+        description: "Retrieve all saved notes for the user.",
+        parameters: { type: Type.OBJECT, properties: {} }
+      };
+
       const chat = ai.chats.create({
         model: "gemini-3-flash-preview",
         config: {
@@ -222,7 +265,7 @@ export default function App() {
           tools: [
             ...(activeAgent.id === 'pulse' ? [{ functionDeclarations: [getWeatherTool] }] : []),
             ...(activeAgent.id === 'researcher' ? [{ googleSearch: {} }] : []),
-            ...(activeAgent.id === 'orchestrator' ? [{ functionDeclarations: [createTaskTool, saveNoteTool] }] : [])
+            ...(activeAgent.id === 'orchestrator' ? [{ functionDeclarations: [createTaskTool, saveNoteTool, listTasksTool, listNotesTool] }] : [])
           ],
         },
         history: currentMessages.map(m => ({
@@ -305,6 +348,36 @@ export default function App() {
               toolResults.push({
                 name: call.name,
                 response: { content: "Failed to save note.", id: call.id }
+              });
+            }
+          } else if (call.name === "listTasks") {
+            try {
+              const q = query(collection(db, 'tasks'), where('uid', '==', user.uid), orderBy('createdAt', 'desc'));
+              const snapshot = await getDocs(q);
+              const tasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+              toolResults.push({
+                name: call.name,
+                response: { content: JSON.stringify(tasks), id: call.id }
+              });
+            } catch (err) {
+              toolResults.push({
+                name: call.name,
+                response: { content: "Failed to retrieve tasks.", id: call.id }
+              });
+            }
+          } else if (call.name === "listNotes") {
+            try {
+              const q = query(collection(db, 'notes'), where('uid', '==', user.uid), orderBy('createdAt', 'desc'));
+              const snapshot = await getDocs(q);
+              const notes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+              toolResults.push({
+                name: call.name,
+                response: { content: JSON.stringify(notes), id: call.id }
+              });
+            } catch (err) {
+              toolResults.push({
+                name: call.name,
+                response: { content: "Failed to retrieve notes.", id: call.id }
               });
             }
           }
@@ -457,6 +530,15 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-4">
+            <button 
+              onClick={() => setIsWorkspaceOpen(!isWorkspaceOpen)}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                isWorkspaceOpen ? 'bg-blue-600 text-white' : 'bg-white/5 text-white/60 hover:bg-white/10 hover:text-white'
+              }`}
+            >
+              <Layout size={14} />
+              <span>Workspace</span>
+            </button>
             <div className="hidden md:flex items-center gap-2 text-[10px] text-white/40 font-mono">
               <Terminal size={12} />
               <span>v2.5.0-stable</span>
@@ -465,11 +547,12 @@ export default function App() {
         </header>
 
         {/* Chat Area */}
-        <div 
-          ref={scrollRef}
-          className="flex-1 overflow-y-auto p-6 space-y-8 scroll-smooth"
-        >
-          {currentMessages.length === 0 && (
+        <div className="flex-1 flex overflow-hidden">
+          <div 
+            ref={scrollRef}
+            className="flex-1 overflow-y-auto p-6 space-y-8 scroll-smooth"
+          >
+            {currentMessages.length === 0 && (
             <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto space-y-6">
               <div className="w-20 h-20 rounded-3xl bg-white/5 flex items-center justify-center text-blue-500">
                 {getIcon(activeAgent.icon, "w-10 h-10")}
@@ -546,6 +629,78 @@ export default function App() {
               </div>
             </motion.div>
           )}
+          </div>
+
+          {/* Workspace Panel */}
+          <motion.div
+            initial={false}
+            animate={{ width: isWorkspaceOpen ? 350 : 0, opacity: isWorkspaceOpen ? 1 : 0 }}
+            className="border-l border-white/10 bg-[#0F0F0F] overflow-hidden flex flex-col"
+          >
+            <div className="p-4 border-b border-white/10 flex items-center justify-between">
+              <h3 className="text-sm font-bold uppercase tracking-wider text-white/60">Workspace</h3>
+              <button onClick={() => setIsWorkspaceOpen(false)} className="text-white/40 hover:text-white">
+                <X size={16} />
+              </button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-4 space-y-6">
+              {/* Tasks Section */}
+              <section className="space-y-3">
+                <div className="flex items-center gap-2 text-xs font-semibold text-blue-400">
+                  <CheckCircle size={14} />
+                  <span>TASKS</span>
+                  <span className="ml-auto bg-blue-500/10 px-1.5 py-0.5 rounded text-[10px]">{tasks.length}</span>
+                </div>
+                <div className="space-y-2">
+                  {tasks.length === 0 ? (
+                    <div className="text-[10px] text-white/20 italic p-4 border border-dashed border-white/5 rounded-lg text-center">
+                      No tasks yet. Ask Nexus Core to create one!
+                    </div>
+                  ) : (
+                    tasks.map(task => (
+                      <div key={task.id} className="p-3 bg-white/5 rounded-lg border border-white/5 group hover:border-blue-500/30 transition-colors">
+                        <div className="text-xs font-medium text-white/90 mb-1">{task.title}</div>
+                        <div className="flex items-center justify-between">
+                          <span className={`text-[9px] uppercase font-bold ${task.status === 'completed' ? 'text-emerald-500' : 'text-orange-500'}`}>
+                            {task.status}
+                          </span>
+                          {task.dueDate && (
+                            <span className="text-[9px] text-white/30 font-mono">Due: {new Date(task.dueDate).toLocaleDateString()}</span>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </section>
+
+              {/* Notes Section */}
+              <section className="space-y-3">
+                <div className="flex items-center gap-2 text-xs font-semibold text-purple-400">
+                  <FileText size={14} />
+                  <span>NOTES</span>
+                  <span className="ml-auto bg-purple-500/10 px-1.5 py-0.5 rounded text-[10px]">{notes.length}</span>
+                </div>
+                <div className="space-y-2">
+                  {notes.length === 0 ? (
+                    <div className="text-[10px] text-white/20 italic p-4 border border-dashed border-white/5 rounded-lg text-center">
+                      No notes saved.
+                    </div>
+                  ) : (
+                    notes.map(note => (
+                      <div key={note.id} className="p-3 bg-white/5 rounded-lg border border-white/5 hover:border-purple-500/30 transition-colors">
+                        <div className="text-[11px] text-white/70 leading-relaxed line-clamp-3">{note.content}</div>
+                        <div className="mt-2 text-[8px] text-white/20 font-mono">
+                          {note.createdAt?.toDate?.()?.toLocaleDateString() || new Date().toLocaleDateString()}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </section>
+            </div>
+          </motion.div>
         </div>
 
         {/* Input Area */}
