@@ -259,7 +259,7 @@ export default function App() {
       };
 
       const chat = ai.chats.create({
-        model: "gemini-3-flash-preview",
+        model: activeAgent.id === 'orchestrator' ? "gemini-3.1-pro-preview" : "gemini-3-flash-preview",
         config: {
           systemInstruction: activeAgent.systemInstruction,
           tools: [
@@ -278,6 +278,8 @@ export default function App() {
       
       // Handle Function Calls (Track 2 & 3: Real-world Data & Productivity)
       let functionCalls = result.functionCalls;
+      let accumulatedText = result.text || "";
+
       if (functionCalls) {
         const toolResults = [];
         for (const call of functionCalls) {
@@ -383,15 +385,21 @@ export default function App() {
           }
         }
         
-        // Send tool results back to model to get final response
-        result = await chat.sendMessage({
-          message: toolResults.map(tr => ({
-            functionResponse: { name: tr.name, response: tr.response }
-          }))
-        });
+        if (toolResults.length > 0) {
+          // Send tool results back to model to get final response
+          const secondResult = await chat.sendMessage({
+            message: toolResults.map(tr => ({
+              functionResponse: { name: tr.name, response: tr.response }
+            }))
+          });
+          
+          if (secondResult.text) {
+            accumulatedText = (accumulatedText ? accumulatedText + "\n\n" : "") + secondResult.text;
+          }
+        }
       }
 
-      const modelResponse = result.text || "I'm sorry, I couldn't generate a response.";
+      const modelResponse = accumulatedText || "I've processed your request, but I couldn't generate a text summary. Please check your workspace for any updates.";
 
       // Save model response to Firestore
       await addDoc(collection(db, 'messages'), {
