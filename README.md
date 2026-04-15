@@ -50,8 +50,8 @@ Nexus AI isn't just another chatbot. It's a **Universal Agent Hub** that allows 
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/nidhibamania/nexus-agent-hub.git
-   cd nexus-agent-hub
+   git clone https://github.com/nidhibamania/nexus-agent-hub-.git
+   cd nexus-agent-hub-
    ```
 
 2. **Install dependencies:**
