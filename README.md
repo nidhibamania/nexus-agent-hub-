@@ -50,8 +50,8 @@ Nexus AI isn't just another chatbot. It's a **Universal Agent Hub** that allows 
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/YOUR_USERNAME/nexus-ai-agent-hub.git
-   cd nexus-ai-agent-hub
+   git clone https://github.com/nidhibamania/nexus-agent-hub.git
+   cd nexus-agent-hub
    ```
 
 2. **Install dependencies:**
@@ -60,9 +60,13 @@ Nexus AI isn't just another chatbot. It's a **Universal Agent Hub** that allows 
    ```
 
 3. **Set up environment variables:**
-   Create a `.env` file in the root directory and add your API key:
+   Copy the `.env.example` file to a new file named `.env`:
+   ```bash
+   cp .env.example .env
+   ```
+   Then, open `.env` and add your Gemini API key:
    ```env
-   VITE_GEMINI_API_KEY=your_api_key_here
+   GEMINI_API_KEY=your_api_key_here
    ```
 
 4. **Run the development server:**
