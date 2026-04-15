@@ -175,13 +175,59 @@ export default function App() {
   const handleSendMessage = async () => {
     if (!input.trim() || isLoading || !user) return;
 
-    // Check for either the standard key or our new custom key name
-    const apiKey = process.env.NEXUS_API_KEY || process.env.GEMINI_API_KEY;
+    // Helper to check if a key is valid
+    const isValid = (key: any) => {
+      if (typeof key !== 'string') return false;
+      const k = key.trim();
+      return k.length > 0 && 
+             k !== 'undefined' && 
+             k !== 'null' &&
+             k !== 'MY_GEMINI_API_KEY' && 
+             k !== 'process.env.GEMINI_API_KEY' &&
+             !k.includes('TODO');
+    };
+
+    // Log all potential sources for debugging
+    console.log("DEBUG - API Key Sources:", {
+      process_env_gemini: process.env.GEMINI_API_KEY,
+      import_meta_env_gemini: (import.meta as any).env?.GEMINI_API_KEY,
+      process_env_nexus: process.env.NEXUS_API_KEY,
+      import_meta_env_nexus: (import.meta as any).env?.NEXUS_API_KEY,
+    });
+
+    const apiKey = isValid(process.env.GEMINI_API_KEY) ? process.env.GEMINI_API_KEY : 
+                   isValid((import.meta as any).env?.GEMINI_API_KEY) ? (import.meta as any).env?.GEMINI_API_KEY :
+                   isValid(process.env.NEXUS_API_KEY) ? process.env.NEXUS_API_KEY : 
+                   isValid((import.meta as any).env?.NEXUS_API_KEY) ? (import.meta as any).env?.NEXUS_API_KEY : 
+                   isValid(process.env.CUSTOM_GEMINI_KEY) ? process.env.CUSTOM_GEMINI_KEY :
+                   null;
     
-    if (!apiKey || apiKey === 'undefined' || apiKey === '') {
+    console.log("API Key Status:", {
+      hasKey: !!apiKey,
+      keyPreview: apiKey ? `${apiKey.substring(0, 4)}...` : 'none'
+    });
+    
+    if (!apiKey) {
+      const geminiVal = String(process.env.GEMINI_API_KEY);
       const errorMessage: Message = {
         role: 'model',
-        content: "Error: API Key is missing. Please add a secret named 'NEXUS_API_KEY', paste your key string, and click 'Apply changes'.",
+        content: `Error: API Key is missing or invalid. 🛠️ 
+
+Current Key Status: Not Found (or Placeholder Detected)
+
+Please try these steps:
+1. Go to 'Settings' > 'Secrets'.
+2. Click **'Add secret'**.
+3. Name: **NEXUS_API_KEY** (Use this name to avoid the "reserved" error).
+4. Value: Paste your key from Google AI Studio (the one ending in **9PD8** is perfect).
+5. Click **'Apply changes'**.
+6. **Wait for the server to restart.**
+7. **Refresh your browser page (F5)**.
+
+Debug Info:
+- process.env.GEMINI_API_KEY: ${geminiVal ? `Present (Value: "${geminiVal.substring(0, 5)}...")` : 'Missing'}
+- import.meta.env.GEMINI_API_KEY: ${(import.meta as any).env?.GEMINI_API_KEY ? 'Present' : 'Missing'}
+- isValid Check: ${isValid(process.env.GEMINI_API_KEY) ? 'Passed' : 'Failed'}`,
         timestamp: new Date()
       };
       setMessages(prev => ({
@@ -412,9 +458,17 @@ export default function App() {
 
     } catch (error: any) {
       console.error("Gemini Error:", error);
+      
+      let friendlyMessage = `Error: Failed to connect to the agent. ${error?.message || "Please check your connection."}`;
+      
+      // Specific handling for API key issues
+      if (error?.message?.includes("API key not valid") || error?.message?.includes("API_KEY_INVALID")) {
+        friendlyMessage = "Error: Your Gemini API Key is invalid. 🛠️ Please go to 'Settings' > 'Secrets', delete the current 'GEMINI_API_KEY', add it again with a fresh key from Google AI Studio, and click 'Apply changes'.";
+      }
+
       const errorMessage: Message = {
         role: 'model',
-        content: `Error: Failed to connect to the agent. ${error?.message || "Please check your connection."}`,
+        content: friendlyMessage,
         timestamp: new Date()
       };
       setMessages(prev => ({
